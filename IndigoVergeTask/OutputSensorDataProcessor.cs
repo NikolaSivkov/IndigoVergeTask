@@ -38,7 +38,7 @@ namespace IndigoVergeTask
                     previousSensorValues[sensorReader.SensorName] = sensorData.SensorValue;
                 }
 #if DEBUG 
-                Console.WriteLine($"[{sensorData.RecordedOn}]{sensorData.SensorName}: {sensorData.SensorValue}");
+                Console.WriteLine($"DEBUG LOG [{sensorData.RecordedOn}]{sensorData.SensorName}: {sensorData.SensorValue}");
 #endif
             }
 
