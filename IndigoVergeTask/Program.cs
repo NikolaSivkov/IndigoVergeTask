@@ -8,22 +8,82 @@ using Newtonsoft.Json.Converters;
 using System.Threading.Tasks;
 using System.IO;
 using IndigoVergeTask.DB;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace IndigoVergeTask
 {
     class Program
     {
-        public static Config _config { get; set; }
+        private static IServiceProvider serviceProvider;
+
+        public static AppConfig _config { get; set; }
         static async Task Main(string[] args)
         {
-            var configFile = await File.ReadAllTextAsync("./appsettings.json");
-            _config = JsonConvert.DeserializeObject<Config>(configFile);
+            ConfigureServices();
+
             var db = new SensorDataDB();
             await db.Database.EnsureCreatedAsync();
-            RepeatingTask(OutputSensoryData, _config.OutputIntervalMs, CancellationToken.None);
-            RepeatingTask(RecordSensoryData, _config.DbSaveIntervalMs, CancellationToken.None);
 
+            var processors = serviceProvider.GetServices<ISensorDataProcessor>();
+
+            foreach (var item in processors)
+            {
+                RepeatingTask(item.ProcessSensorRecord, item.IntervalMs, CancellationToken.None);
+
+            }
+           
             Console.ReadLine();
+        }
+
+        private static void ConfigureServices()
+        {
+            IConfiguration config = new ConfigurationBuilder().AddJsonFile("appsettings.json").Build();
+
+            var services = new ServiceCollection();
+
+
+            var appConfig = new AppConfig();
+
+            config.GetSection(AppConfig.SectionName).Bind(appConfig);
+            services.AddSingleton<IAppConfig>(appConfig);
+
+            services.AddSingleton<IModbusMaster>((IServiceProvider) =>
+            {
+                TcpClient client = new TcpClient(appConfig.IpAddress, appConfig.Port);
+                var factory = new ModbusFactory();
+                return factory.CreateMaster(client);
+            });
+
+            services.AddTransient<SensorDataDB>();
+
+            services.Scan(sc =>
+                  sc.FromAssemblyOf<ISensorDataReader>()
+                  .AddClasses(classes => classes.AssignableTo<ISensorDataReader>())
+                  // We then specify what type we want to register these classes as.
+                  // In this case, we want to register the types as all of its implemented interfaces.
+                  // So if a type implements 3 interfaces; A, B, C, we'd end up with three separate registrations.
+                  .AsImplementedInterfaces()
+                  // And lastly, we specify the lifetime of these registrations.
+                  .WithTransientLifetime()
+              );
+
+
+            // autoregister tax calculators
+            // this assumes all tax calculators live under the same assembly
+            services.Scan(sc =>
+                sc.FromAssemblyOf<ISensorDataProcessor>()
+                .AddClasses(classes => classes.AssignableTo<ISensorDataProcessor>())
+                // We then specify what type we want to register these classes as.
+                // In this case, we want to register the types as all of its implemented interfaces.
+                // So if a type implements 3 interfaces; A, B, C, we'd end up with three separate registrations.
+                .AsImplementedInterfaces()
+                // And lastly, we specify the lifetime of these registrations.
+                .WithTransientLifetime()
+            );
+
+
+            serviceProvider = services.BuildServiceProvider();
         }
 
         static void RepeatingTask(Func<Task> action, int miliseconds, CancellationToken token)
@@ -40,63 +100,5 @@ namespace IndigoVergeTask
             }, token);
         }
 
-        public static Task OutputSensoryData()
-        {
-            using (TcpClient client = new TcpClient(_config.IpAddress, _config.Port))
-            {
-                var factory = new ModbusFactory();
-                IModbusMaster master = factory.CreateMaster(client);
-                byte slaveAddress = _config.SlaveAddress;
-
-                foreach (var sensor in _config.Sensors)
-                {
-                    ushort[] inputs = master.ReadHoldingRegisters(slaveAddress, sensor.StartAddress, sensor.NumberOfPoints);
-                    Console.WriteLine($"{sensor.Name}: {ToFloat(inputs)}");
-                }
-            }
-            return Task.FromResult(true);
-        }
-
-        public static async Task RecordSensoryData()
-        {
-            using TcpClient client = new TcpClient(_config.IpAddress, _config.Port);
-
-            var factory = new ModbusFactory();
-            IModbusMaster master = factory.CreateMaster(client);
-
-            byte slaveAddress = _config.SlaveAddress;
-
-            using var db = new SensorDataDB();
-
-            foreach (var sensor in _config.Sensors)
-            {
-
-                ushort[] inputs = await master.ReadHoldingRegistersAsync(slaveAddress, sensor.StartAddress, sensor.NumberOfPoints);
-                var sensorValue = ToFloat(inputs);
-
-                var data = new SensorRecord()
-                {
-                    RecordedOn = DateTimeOffset.Now,
-                    SensorName = sensor.Name,
-                    SensorValue = sensorValue
-                };
-
-                db.SensorsData.Add(data);
-                await db.SaveChangesAsync();
-
-            }
-        }
-
-        public static float ToFloat(ushort[] buffer)
-        {
-            byte[] bytes = new byte[4];
-            bytes[0] = (byte)(buffer[0] & 0xFF);
-            bytes[1] = (byte)(buffer[0] >> 8);
-            bytes[2] = (byte)(buffer[1] & 0xFF);
-            bytes[3] = (byte)(buffer[1] >> 8);
-
-            float value = BitConverter.ToSingle(bytes, 0);
-            return value;
-        }
     }
 }

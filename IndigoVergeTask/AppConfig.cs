@@ -8,8 +8,10 @@ using Newtonsoft.Json.Converters;
 namespace IndigoVergeTask
 {
   
-    public partial class Config
+    public partial class AppConfig : IAppConfig
     {
+        public const string SectionName = "SensorOptions";
+
         [JsonProperty("IpAddress")]
         public string IpAddress { get; set; }
 
@@ -29,7 +31,7 @@ namespace IndigoVergeTask
         public List<Sensor> Sensors { get; set; }
     }
 
-    public partial class Sensor
+    public partial class Sensor :ISensor
     {
         [JsonProperty("Name")]
         public string Name { get; set; }
